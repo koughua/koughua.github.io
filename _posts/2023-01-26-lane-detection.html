@@ -117,25 +117,76 @@ def liou_loss(pred, target, img_w, length=15):
 {% endhighlight %}
 
 
-<h2 class="section-heading">The Final Frontier</h2>
+<h2 class="section-heading">ROI Gather</h2>
+<blockquote class="blockquote">I should to figure out how there work. </blockquote>
+{% highlight ruby %}
+'''
+    ROIGather module for gather global information
+    Args:
+        in_channels: prior feature channels
+        num_priors: prior numbers we predefined
+        sample_points: the number of sampled points when we extract feature from line
+        fc_hidden_dim: the fc output channel
+        refine_layers: the total number of layers to build refine
+    '''
+{% endhighlight %}
+{% highlight ruby %}
+{% endhighlight %}
+<p>
+<ul>
+  <li>Concatenate the feature of previous layers, refine to the same size.</li>
+    {% highlight ruby %}
+        def roi_fea(self, x, layer_index):
+        feats = []
+        for i, feature in enumerate(x):
+            feat_trans = self.convs[i](feature)
+            feats.append(feat_trans)
+        cat_feat = torch.cat(feats, dim=1)
+        cat_feat = self.catconv[layer_index](cat_feat)
+        return cat_feat
+{% endhighlight %}
+  <li>Change the size of $[bs \times num_prior, prior_feat_channel \times sample_point] $ to $ [bs \times num_prior, H \times W]$</li>
+  <li>Generate the Q, K and V, where Q = $ [bs, num_prior, C, 1]$, K = $[bs, num_prior, H \times W]$, V = $[bs, H \times W, C]$</li>
+</ul>
+{% highlight ruby %}
+    roi = self.roi_fea(roi_features, layer_index)
+    bs = x.size(0)
+    roi = roi.contiguous().view(bs * self.num_priors, -1)
 
-<p>There can be no thought of finishing for ‘aiming for the stars.’ Both figuratively and literally, it is a task to occupy the generations. And no matter how much progress one makes, there is always the thrill of just beginning.</p>
+    roi = F.relu(self.fc_norm(self.fc(roi)))
+    roi = roi.view(bs, self.num_priors, -1)
+    query = roi
 
-<p>There can be no thought of finishing for ‘aiming for the stars.’ Both figuratively and literally, it is a task to occupy the generations. And no matter how much progress one makes, there is always the thrill of just beginning.</p>
+    value = self.resize(self.f_value(x))
+    query = self.f_query(query)
+    key = self.f_key(x)
+    value = value.permute(0, 2, 1)
+    key = self.resize(key)
+    sim_map = torch.matmul(query, key)
+    sim_map = (self.in_channels**-.5) * sim_map
+    sim_map = F.softmax(sim_map, dim=-1)
 
-<blockquote class="blockquote">The dreams of yesterday are the hopes of today and the reality of tomorrow. Science has not yet mastered prophecy. We predict too much for the next year and yet far too little for the next ten.</blockquote>
+    context = torch.matmul(sim_map, value)
+    context = self.W(context)
 
-<p>Spaceflights cannot be stopped. This is not the work of any one man or even a group of men. It is a historical process which mankind is carrying out in accordance with the natural laws of human development.</p>
+    roi = roi + F.dropout(context, p=0.1, training=self.training)
 
-<h2 class="section-heading">Reaching for the Stars</h2>
+    return roi
+{% endhighlight %}
+</p>
 
-<p>As we got further and further away, it [the Earth] diminished in size. Finally it shrank to the size of a marble, the most beautiful you can imagine. That beautiful, warm, living object looked so fragile, so delicate, that if you touched it with a finger it would crumble and fall apart. Seeing this has to change a man.</p>
 
-<img class="img-fluid" src="https://source.unsplash.com/Mn9Fa_wQH-M/800x450" alt="Demo Image">
-<span class="caption text-muted">To go places and do things that have never been done before – that’s what living is all about.</span>
+<h2 class="section-heading">Question</h2>
 
-<p>Space, the final frontier. These are the voyages of the Starship Enterprise. Its five-year mission: to explore strange new worlds, to seek out new life and new civilizations, to boldly go where no man has gone before.</p>
+<blockquote class="blockquote">
+    <ol>
+        <li>In the Ablation Experiment, the Auther remove the Line IoU Loss, is it change to the SmoothL1Loss or just remove this constraint, I don't think so, if remove this Loss completely, the mf1 cannot drop only 4 point. </li>
+        <li>How the higher parameters of loss change?</li>
+    </ol>
+</blockquote>
 
-<p>As I stand out here in the wonders of the unknown at Hadley, I sort of realize there’s a fundamental truth to our nature, Man must explore, and this is exploration at its greatest.</p>
 
-<p>Placeholder text by <a href="http://spaceipsum.com/">Space Ipsum</a>. Photographs by <a href="https://unsplash.com/">Unsplash</a>.</p>
+
+<!--<img class="img-fluid" src="https://source.unsplash.com/Mn9Fa_wQH-M/800x450" alt="Demo Image">-->
+<!--<span class="caption text-muted">To go places and do things that have never been done before – that’s what living is all about.</span>-->
+<!--<p>Placeholder text by <a href="http://spaceipsum.com/">Space Ipsum</a>. Photographs by <a href="https://unsplash.com/">Unsplash</a>.</p>-->
