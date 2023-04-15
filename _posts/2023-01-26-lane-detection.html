@@ -1,14 +1,122 @@
 ---
 layout: post
-title: "Lane detection"
+title: "CLRNet: Cross Layer Refinement Network for Lane Detection"
 subtitle: "there is some mind of my"
 date: 2023-01-26 23:45:13 -0400
 background: '/img/posts/05.jpg'
 ---
 
-<p> Never \[ i\hbar \frac{d \Psi(x,t)}{dt} = - \frac{\hbar^{2}}{2m} \nabla^{2} \Psi(x,t) + V(x) \Psi(x,t)\] in all their history have men been able truly to conceive of the world as one: a single sphere, a globe, having the qualities of a globe, a round earth in which all the directions eventually meet, in which there is no center because every point, or none, is center — an equal earth which all men occupy as equals. The airman's earth, if free men make it, will be truly round: a globe in practice, not in theory.</p>
 
-<p> $$ \nabla_\boldsymbol{x} J(\boldsymbol{x}) $$ </p>
+<h2
+        class="section-heading">The Way to Generate the anchor start
+</h2>
+<p>
+  with the lift side and the right side, but the angel is 0.2, 0.4, 0.6, 0.8, for the image scale below img_w / img_h > 1, this angle is someway normal, but <1 the angle is too large, which should be around the 0.5(not be 0.5.
+{% highlight ruby %}
+    def _init_prior_embeddings(self):
+        # [start_y, start_x, theta] -> all normalize
+        self.prior_embeddings = nn.Embedding(self.num_priors, 3)
+
+        bottom_priors_nums = self.num_priors * 3 // 4
+        left_priors_nums, _ = self.num_priors // 8, self.num_priors // 8
+
+        strip_size = 0.5 / (left_priors_nums // 2 - 1)
+        bottom_strip_size = 1 / (bottom_priors_nums // 4 + 1)
+        for i in range(left_priors_nums):
+            nn.init.constant_(self.prior_embeddings.weight[i, 0],
+                              (i // 2) * strip_size)
+            nn.init.constant_(self.prior_embeddings.weight[i, 1], 0.)
+            nn.init.constant_(self.prior_embeddings.weight[i, 2],
+                              0.16 if i % 2 == 0 else 0.32)
+
+        for i in range(left_priors_nums,
+                       left_priors_nums + bottom_priors_nums):
+            nn.init.constant_(self.prior_embeddings.weight[i, 0], 0.)
+            nn.init.constant_(self.prior_embeddings.weight[i, 1],
+                              ((i - left_priors_nums) // 4 + 1) * bottom_strip_size)
+            nn.init.constant_(self.prior_embeddings.weight[i, 2], 0.2 * (i % 4 + 1))
+
+        for i in range(left_priors_nums + bottom_priors_nums, self.num_priors):
+            nn.init.constant_(
+                self.prior_embeddings.weight[i, 0],
+                ((i - left_priors_nums - bottom_priors_nums) // 2) *
+                strip_size)
+            nn.init.constant_(self.prior_embeddings.weight[i, 1], 1.)
+            nn.init.constant_(self.prior_embeddings.weight[i, 2],
+                              0.68 if i % 2 == 0 else 0.84)
+{% endhighlight %}
+</p>
+<p> the way to generate the priors(anchor) with the start and the angle
+{% highlight ruby %}
+      def generate_priors_from_embeddings(self):
+        predictions = self.prior_embeddings.weight  # (num_prop, 3)
+
+        # 2 scores, 1 start_y, 1 start_x, 1 theta, 1 length, 72 coordinates, score[0] = negative prob, score[1] = positive prob
+        priors = predictions.new_zeros(
+            (self.num_priors, 2 + 2 + 2 + self.n_offsets), device=predictions.device)
+
+        priors[:, 2:5] = predictions.clone()
+        priors[:, 6:] = (
+            priors[:, 3].unsqueeze(1).clone().repeat(1, self.n_offsets) *
+            (self.img_w - 1) +
+            ((1 - self.prior_ys.repeat(self.num_priors, 1) -
+              priors[:, 2].unsqueeze(1).clone().repeat(1, self.n_offsets)) * self.img_h / torch.tan(
+              priors[:, 4].unsqueeze(1).clone().repeat(
+                 1, self.n_offsets) * math.pi + 1e-5))) / (self.img_w - 1)
+
+        # init priors on feature map
+        priors_on_featmap = priors.clone()[..., 6 + self.sample_x_indexs]
+
+        return priors, priors_on_featmap
+{% endhighlight %}
+
+  Otherwise, they normalized the anchor and output in the direction of width and length, if the width is 800, maybe the normalize is useful, but for width 12, may it will attend some errors by calculate w.r.t truncation error.
+</p>
+
+<h2 class="section-heading"> Lane IoU Loss</h2>
+<p> I think the length 15 is suitable for the image width of 800.
+{% highlight ruby %}
+      dimport torch
+
+
+def line_iou(pred, target, img_w, length=15, aligned=True):
+    '''
+    Calculate the line iou value between predictions and targets
+    Args:
+        pred: lane predictions, shape: (num_pred, 72)
+        target: ground truth, shape: (num_target, 72)
+        img_w: image width
+        length: extended radius
+        aligned: True for iou loss calculation, False for pair-wise ious in assign
+    '''
+    px1 = pred - length
+    px2 = pred + length
+    tx1 = target - length
+    tx2 = target + length
+    if aligned:
+        invalid_mask = target
+        ovr = torch.min(px2, tx2) - torch.max(px1, tx1)
+        union = torch.max(px2, tx2) - torch.min(px1, tx1)
+    else:
+        num_pred = pred.shape[0]
+        invalid_mask = target.repeat(num_pred, 1, 1)
+        ovr = (torch.min(px2[:, None, :], tx2[None, ...]) -
+               torch.max(px1[:, None, :], tx1[None, ...]))
+        union = (torch.max(px2[:, None, :], tx2[None, ...]) -
+                 torch.min(px1[:, None, :], tx1[None, ...]))
+
+    invalid_masks = (invalid_mask < 0) | (invalid_mask >= img_w)
+    ovr[invalid_masks] = 0.
+    union[invalid_masks] = 0.
+    iou = ovr.sum(dim=-1) / (union.sum(dim=-1) + 1e-9)
+    return iou
+
+
+def liou_loss(pred, target, img_w, length=15):
+    return (1 - line_iou(pred, target, img_w, length)).mean
+{% endhighlight %}
+
+
 <h2 class="section-heading">The Final Frontier</h2>
 
 <p>There can be no thought of finishing for ‘aiming for the stars.’ Both figuratively and literally, it is a task to occupy the generations. And no matter how much progress one makes, there is always the thrill of just beginning.</p>
