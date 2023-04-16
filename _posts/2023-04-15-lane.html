@@ -1,0 +1,69 @@
+---
+layout: post
+title: "Lane Detection"
+subtitle: "there is some mind of my for some papers"
+date: 2023-04-10 15:10:13 -0400
+background: '/img/posts/06.jpg'
+---
+{% highlight ruby %}
+{% endhighlight %}
+
+<h2 class="section-heading">
+    Focal on Local: Detection Lane Marker from Bottom Up via Key Point
+</h2>
+<ol>
+    <li>
+         Seg method, bottom_up manner
+    </li>
+    <li>
+        has two heads, frist predicts the existence of key points, second refine the location of the key points, correlated the key points of the same lane lines $\hat{p} = p + \Delta x | \hat{p} = \hat{p} + \Delta x + \Delta y $ .
+    </li>
+
+    <li>
+        for $\Delta$ use the l1 Loss.
+    </li>
+</ol>
+
+<h2 class="section-heading">
+    Anchor3DLane
+</h2>
+<ol>
+    <li>
+        <p>
+            The Decoder Layer, all use this framework. with
+            {% highlight ruby %}
+            self.cls_layer.append(DecodeLayer(self.anchor_feat_channels * self.anchor_feat_len, self.anchor_feat_channels * self.anchor_feat_len, self.num_category))
+            self.reg_x_layer.append(DecodeLayer(self.anchor_feat_channels * self.anchor_feat_len, self.anchor_feat_channels, self.anchor_len))
+            self.reg_z_layer.append(DecodeLayer(self.anchor_feat_channels * self.anchor_feat_len, self.anchor_feat_channels, self.anchor_len))
+            self.reg_vis_layer.append(DecodeLayer(self.anchor_feat_channels * self.anchor_feat_len, self.anchor_feat_channels, self.anchor_len))
+            {% endhighlight %}
+
+
+            {% highlight ruby %}
+            class DecodeLayer(nn.Module):
+            def __init__(self, in_channel, mid_channel, out_channel):
+                super(DecodeLayer, self).__init__()
+                self.layer = nn.Sequential(
+                    nn.Linear(in_channel, mid_channel),
+                    nn.ReLU6(),
+                    nn.Linear(mid_channel, mid_channel),
+                    nn.ReLU6(),
+                    nn.Linear(mid_channel, out_channel))
+            def forward(self, x):
+                return self.layer(x)
+            {% endhighlight %}
+        </p>
+    </li>
+    <li>
+        the Focal Loss $\alpha = 0.5, \gamma = 2$. lr = 1e-4, seems do not us the schedule, because the step lr:
+        {% highlight ruby %}
+        lr_config = dict(policy='step', step=[45000,], by_epoch=False)
+        {% endhighlight %}
+    </li>
+    <li>
+        first use backbone down sampling 8, the channel is 512, then project to the 64, by a single conv2d. then use F.interpolate to make the mask to the feat size with [bs, 64, 45, 60]. send to the transformer layers(out is the same size). finally we got the trans_feat.
+    </li>
+    <li>
+        anchor_projection:
+    </li>
+</ol>
