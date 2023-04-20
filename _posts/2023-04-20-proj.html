@@ -1,0 +1,69 @@
+---
+layout: post
+title: "How to Project between Coordinates"
+subtitle: "there is some mind of my"
+date: 2023-04-20 01:45:13 -0400
+background: '/img/posts/04.jpg'
+---
+
+
+<h2 class="section-heading">
+    Base Matrix
+</h2>
+<p>
+  First is the intrinsic matrix, with the f and half size with the orig_img size, which project from camera coordinate to image-plane coordinate.
+</p>
+{% highlight ruby %}
+    [2015., 0., 960., 0.],
+     [0., 2015., 540., 0.],
+     [0., 0., 1., 0.],
+     [0., 0., 0., 1.]
+{% endhighlight %}
+<p>
+    Second is the extrinsic matrx, with Rotation matrix form [:3, :3] and the transport matrix from [:3, 3], which project the word coordinates to the camera coordinates, but all is the 3D Coordinates.
+</p>
+    {% highlight ruby %}
+    [1, 0, 0, 0],
+    [0, np.cos(np.pi / 2 + cam_pitch), -np.sin(np.pi / 2 + cam_pitch), cam_height],
+    [0, np.sin(np.pi / 2 + cam_pitch), np.cos(np.pi / 2 + cam_pitch), 0],
+    [0, 0, 0, 1]
+{% endhighlight %}
+<p>
+    Third is the image coordinates with the bev coordinates, because the zero-point in the image plane is the left-top corner, but the zero-point for bev plane is in the middle-bottom, thus
+</p>
+{% highlight ruby %}
+    [[1., 0., 0., -(bev_w // 2)],
+    [0., -1, 0, bev_h],
+    [0., 0, 1, 0.],
+    [0., 0., 0., 1.]]
+{% endhighlight %}
+<p>
+    Forth is the scale matrix, if we want to sample from the feature map or the FV_image, we can use the function with torch.nn.functional.grid_sample(). Notice that:
+</p>
+<blockquote class="blockquote">
+    grid specifies the sampling pixel locations normalized by the input spatial dimensions. Therefore, it should have most values in the range of [-1, 1]. For example, values x = -1, y = -1 is the left-top pixel of input, and values x = 1, y = 1 is the right-bottom pixel of input.
+</blockquote>
+{% highlight ruby %}
+    torch.nn.functional.grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corners=None)
+    '''
+    padding_mode="zeros": use 0 for out-of-bound grid locations,
+    padding_mode="border": use border values for out-of-bound grid locations,
+    padding_mode="reflection": use values at locations reflected by the border for out-of-bound grid locations. For location far away from the border, it will keep being reflected until becoming in bound, e.g., (normalized) pixel location x = -3.5 reflects by border -1 and becomes x' = 1.5, then reflects by border 1 and becomes x'' = -0.5.
+    '''
+{% endhighlight %}
+
+<h2 class="section-heading">
+    Transportation
+</h2>
+<p>
+    Now, we got all matrix, we can generate form bev map coordinate to image plane coordinate as
+</p>
+{% highlight ruby %}
+    Matrix = scale @ self.camera_K_virtual @ self.camera_ext_virtual @ matrix_IPM2ego
+    image_points_ = Matrix @ xyz
+    image_points = image_points_ / image_points_[:2, :]
+{% endhighlight %}
+
+<!--<img class="img-fluid" src="https://source.unsplash.com/Mn9Fa_wQH-M/800x450" alt="Demo Image">-->
+<!--<span class="caption text-muted">To go places and do things that have never been done before – that’s what living is all about.</span>-->
+<!--<p>Placeholder text by <a href="http://spaceipsum.com/">Space Ipsum</a>. Photographs by <a href="https://unsplash.com/">Unsplash</a>.</p>-->
